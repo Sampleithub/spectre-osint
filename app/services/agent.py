@@ -1,24 +1,32 @@
 from __future__ import annotations
 
+import asyncio
 import json
+from typing import Any
+
+from openai import RateLimitError
 
 from app.config import config
 from app.models.schemas import Investigation
 from app.services.llm import llm
+from app.services.tools import TOOL_DEFINITIONS, TOOL_MAP
 
-SYSTEM_PROMPT = """You are Spectre OSINT — an elite Open-Source Intelligence analyst with the mindset of an investigative journalist, corporate due diligence analyst, intelligence researcher, and cyber threat analyst.
+SYSTEM_PROMPT = """You are Spectre OSINT — an elite Open-Source Intelligence analyst.
 
-YOUR JOB: Perform deep OSINT investigations using a human-in-the-loop model. The user will manually search for information and report back to you. You guide them step by step.
+YOUR JOB: Perform deep OSINT investigations autonomously using the tools available to you.
 
 ## WORKFLOW
-1. ANALYZE the target and create an investigation plan (up to 10 steps)
-2. For each step, ask the user to perform a specific search or lookup
-3. When they report findings, analyze them and update the dossier
-4. Move to the next step when ready
-5. After all steps, produce the final comprehensive report
+1. ANALYZE the target and plan your investigation
+2. Use web_search to find information
+3. Use web_fetch to read details from promising pages
+4. Use check_username to find accounts on social platforms
+5. Use search_social to find a person across platforms
+6. Use whois_lookup and dns_lookup for domain intelligence
+7. Use update_dossier to record confirmed findings
+8. Report your findings to the user with analysis
 
-## DOSSIER SECTIONS (use these exact names in your responses)
-- identity_resolution — full name, aliases, age, occupation, education, location, nationality
+## DOSSIER SECTIONS (use update_dossier to fill these)
+- identity_resolution — full name, aliases, age, occupation, education, location
 - digital_footprint — all publicly visible accounts
 - timeline — chronological career/education/life events
 - professional_intelligence — skills, career trajectory, expertise
@@ -33,19 +41,14 @@ YOUR JOB: Perform deep OSINT investigations using a human-in-the-loop model. The
 - verification — cross-check sources, confidence scores
 - unknowns — what remains unanswered
 
-## OUTPUT FORMAT
-Your response should have three clear sections:
-1. **Update** — what the user's findings reveal, cross-referenced with existing data
-2. **Dossier** — updated dossier sections (use the exact section names from above as headings)
-3. **Next** — what the user should search next and why
-
 ## RULES
+- Use at least 3-4 searches before concluding
+- Cross-reference information across multiple sources
 - Distinguish: Confirmed | Highly likely | Possible | Unknown
-- Assign confidence scores (0-100%) to major findings
+- Always cite your sources (include URLs)
 - Never fabricate evidence
-- Cite public sources when possible
-- Be thorough, skeptical, and evidence-driven
-- Maximize accuracy, not certainty"""
+- Be thorough — dig deeper with follow-up searches
+- When you have enough data, present a comprehensive summary"""
 
 
 async def process_turn(investigation: Investigation, user_message: str) -> str:
@@ -54,86 +57,104 @@ async def process_turn(investigation: Investigation, user_message: str) -> str:
     if not investigation.messages:
         investigation.messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"Begin OSINT investigation on: {investigation.target_type} = {investigation.target_value}"},
         ]
-        target_info = json.dumps({
-            "target_type": investigation.target_type,
-            "target_value": investigation.target_value,
-        }, indent=2)
-        investigation.messages.append({
-            "role": "user",
-            "content": f"Begin investigation. Target: {target_info}",
-        })
+        return await _run_agent_loop(investigation)
 
     investigation.messages.append({"role": "user", "content": user_message})
+    investigation.add_turn("user", user_message)
 
     if len(investigation.messages) > 40:
         system = investigation.messages[:1]
-        dossier_state = {
-            "role": "system",
-            "content": f"[DOSSIER STATE - for context]\n{json.dumps(investigation.dossier.to_dict(), indent=2)}",
-        }
         recent = investigation.messages[-30:]
-        investigation.messages = system + [dossier_state] + recent
+        investigation.messages = system + recent
 
-    response = await llm.chat(investigation.messages)
-
-    investigation.messages.append({"role": "assistant", "content": response})
-    investigation.add_turn("assistant", response)
-
-    _update_dossier_from_response(investigation, response)
-
-    return response
+    return await _run_agent_loop(investigation)
 
 
-SECTION_PATTERNS = [
-    "**{section}**",
-    "### {section}",
-    "## {section}",
-    "{section}",
-    "### {display}",
-    "## {display}",
-    "**{display}**",
-]
+async def _run_agent_loop(investigation: Investigation) -> str:
+    max_rounds = 15
+    round_count = 0
 
+    while round_count < max_rounds:
+        round_count += 1
 
-def _update_dossier_from_response(investigation: Investigation, response: str) -> None:
-    lines = response.split("\n")
-    for section_key in investigation.dossier.sections:
-        display_name = section_key.replace("_", " ").title()
-        patterns = [
-            f"**{section_key}**",
-            f"### {section_key}",
-            f"## {section_key}",
-            section_key,
-            f"### {display_name}",
-            f"## {display_name}",
-            f"**{display_name}**",
-        ]
-        for pattern in patterns:
-            captured = _capture_section(lines, pattern)
-            if captured:
-                investigation.dossier.update_section(section_key, captured)
+        for attempt in range(3):
+            try:
+                response = await llm.client.chat.completions.create(
+                    model=llm.model,
+                    messages=investigation.messages,
+                    tools=TOOL_DEFINITIONS,
+                    tool_choice="auto",
+                    max_tokens=config.max_tokens,
+                    temperature=config.temperature,
+                )
                 break
+            except RateLimitError:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(2 ** attempt)
 
+        msg = response.choices[0].message
 
-def _capture_section(lines: list[str], marker: str) -> str | None:
-    marker_lower = marker.lower().strip()
-    for i, line in enumerate(lines):
-        if marker_lower == line.lower().strip() or line.lower().strip().startswith(marker_lower):
-            captured: list[str] = []
-            for l in lines[i + 1:]:
-                stripped = l.strip()
-                if not stripped:
-                    if captured:
-                        break
-                    continue
-                if stripped.startswith("**") and stripped.endswith("**") and len(stripped) > 4:
-                    break
-                if stripped.startswith("### ") or stripped.startswith("## "):
-                    break
-                if stripped == "---":
-                    break
-                captured.append(stripped)
-            if captured:
-                return "\n".join(captured)
-    return None
+        if not msg.tool_calls:
+            investigation.messages.append({"role": "assistant", "content": msg.content or ""})
+            investigation.add_turn("assistant", msg.content or "")
+            return msg.content or ""
+
+        investigation.messages.append({
+            "role": "assistant",
+            "content": msg.content or "",
+            "tool_calls": [
+                {"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                for tc in msg.tool_calls
+            ],
+        })
+
+        for tc in msg.tool_calls:
+            tool_name = tc.function.name
+            try:
+                args = json.loads(tc.function.arguments)
+            except json.JSONDecodeError:
+                args = {}
+
+            if tool_name == "update_dossier":
+                section = args.get("section", "")
+                content = args.get("content", "")
+                confidence = args.get("confidence", 50)
+                if section and content:
+                    investigation.dossier.update_section(section, content)
+                    if confidence:
+                        investigation.dossier.confidence_scores[section] = confidence
+                    result = json.dumps({"status": "updated", "section": section, "confidence": confidence})
+                else:
+                    result = json.dumps({"error": "Missing section or content"})
+            else:
+                fn = TOOL_MAP.get(tool_name)
+                if fn is None:
+                    result = json.dumps({"error": f"Unknown tool: {tool_name}"})
+                else:
+                    try:
+                        result = await fn(**args)
+                        if len(result) > 3000:
+                            result = result[:3000] + "\n\n[... truncated ...]"
+                    except Exception as e:
+                        result = json.dumps({"error": str(e)})
+
+            investigation.messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": result if isinstance(result, str) else json.dumps(result),
+            })
+
+        if round_count >= max_rounds - 2:
+            investigation.messages.append({
+                "role": "user",
+                "content": "You have enough data. Summarize your findings now and submit to dossier. Do not do more searches.",
+            })
+
+    investigation.messages.append({
+        "role": "assistant",
+        "content": "Investigation reached maximum depth. Here is what I found so far.",
+    })
+    return "Investigation reached maximum depth."

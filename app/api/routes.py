@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import os
+import jinja2
 from fastapi import APIRouter, HTTPException, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-import os
 
 from app.models.schemas import Investigation
 from app.services.agent import process_turn
@@ -11,15 +12,19 @@ from app.services.report import generate_report
 from app.services.session_store import store
 
 router = APIRouter()
-templates = Jinja2Templates(
-    directory=os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
+templates_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
+jinja_env = jinja2.Environment(
+    loader=jinja2.FileSystemLoader(templates_dir),
+    autoescape=jinja2.select_autoescape(),
 )
+templates = Jinja2Templates(env=jinja_env)
 
 
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     investigations = store.list_all()
     return templates.TemplateResponse(
+        request,
         "index.html",
         {"request": request, "investigations": investigations},
     )
@@ -43,9 +48,23 @@ async def view_investigation(request: Request, investigation_id: str):
     if not inv:
         raise HTTPException(404, "Investigation not found")
     return templates.TemplateResponse(
+        request,
         "investigation.html",
         {"request": request, "inv": inv},
     )
+
+
+@router.post("/api/investigation/{investigation_id}/start")
+async def start_investigation(investigation_id: str):
+    inv = store.load(investigation_id)
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    if inv.turns:
+        return JSONResponse({"response": inv.turns[-1].content if inv.turns[-1].role == "assistant" else ""})
+
+    response = await process_turn(inv, "")
+    store.save(inv)
+    return JSONResponse({"response": response})
 
 
 @router.post("/api/investigation/{investigation_id}/turn")
@@ -104,6 +123,7 @@ async def view_report(request: Request, investigation_id: str):
     )
 
     return templates.TemplateResponse(
+        request,
         "report.html",
         {
             "request": request,

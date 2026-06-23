@@ -58,7 +58,7 @@
             <div id="loading" class="hidden text-left">
                 <div class="inline-block bg-gray-900 border border-gray-800 rounded-lg px-4 py-3 max-w-[85%]">
                     <div class="text-xs text-green-400 mb-1">SPECTRE_OSINT</div>
-                    <div class="text-gray-400"><span class="typing-indicator">Analyzing</span></div>
+                    <div class="text-gray-400"><span class="typing-indicator">Running OSINT tools</span></div>
                 </div>
             </div>
         </div>
@@ -66,7 +66,7 @@
         <form id="messageForm" class="flex gap-2" onsubmit="return sendMessage(event)">
             <textarea id="messageInput" rows="2"
                       class="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-600 focus:outline-none focus:border-spectre-500 resize-none font-mono text-sm"
-                      placeholder="Report your findings, answer the agent's questions, or ask for next steps..."></textarea>
+                      placeholder="Ask the agent to investigate deeper or follow up on findings..."></textarea>
             <button type="submit" class="bg-spectre-600 hover:bg-spectre-700 text-white font-semibold px-6 rounded-lg transition self-end">
                 Send
             </button>
@@ -126,9 +126,39 @@
     const loadingEl = document.getElementById('loading');
     const form = document.getElementById('messageForm');
     const input = document.getElementById('messageInput');
+    const sendBtn = document.querySelector('button[type="submit"]');
     let investigationId = '{{ inv.id }}';
 
     chatEl.scrollTop = chatEl.scrollHeight;
+
+    // Auto-start the investigation if it's new (no turns yet)
+    const hasTurns = {{ 'true' if inv.turns else 'false' }};
+    if (!hasTurns) {
+        startInvestigation();
+    }
+
+    async function startInvestigation() {
+        loadingEl.classList.remove('hidden');
+        sendBtn.disabled = true;
+        try {
+            const resp = await fetch(`/api/investigation/${investigationId}/start`, { method: 'POST' });
+            const data = await resp.json();
+            loadingEl.classList.add('hidden');
+            sendBtn.disabled = false;
+            const aiDiv = document.createElement('div');
+            aiDiv.className = 'text-left';
+            aiDiv.innerHTML = `<div class="inline-block max-w-[85%] text-left bg-gray-900 border border-gray-800 rounded-lg px-4 py-3 prose-custom">
+                <div class="text-xs text-green-400 mb-1">SPECTRE_OSINT</div>
+                <div class="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap">${escapeHtml(data.response)}</div>
+            </div>`;
+            chatEl.appendChild(aiDiv);
+            chatEl.scrollTop = chatEl.scrollHeight;
+        } catch (err) {
+            loadingEl.classList.add('hidden');
+            sendBtn.disabled = false;
+            console.error(err);
+        }
+    }
 
     async function sendMessage(e) {
         e.preventDefault();
