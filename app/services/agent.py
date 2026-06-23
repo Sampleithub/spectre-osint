@@ -76,21 +76,23 @@ async def _run_agent_loop(investigation: Investigation, max_rounds: int = 6) -> 
     while round_count < max_rounds:
         round_count += 1
 
-        for attempt in range(3):
-            try:
-                response = await llm.client.chat.completions.create(
-                    model=llm.model,
-                    messages=investigation.messages,
-                    tools=TOOL_DEFINITIONS,
-                    tool_choice="auto",
-                    max_tokens=config.max_tokens,
-                    temperature=config.temperature,
-                )
-                break
-            except RateLimitError:
-                if attempt == 2:
-                    raise
-                await asyncio.sleep(2 ** attempt)
+        try:
+            response = await llm.client.chat.completions.create(
+                model=llm.model,
+                messages=investigation.messages,
+                tools=TOOL_DEFINITIONS,
+                tool_choice="auto",
+                max_tokens=config.max_tokens,
+                temperature=config.temperature,
+            )
+        except RateLimitError as e:
+            msg = f"⚠️ **Rate limit hit.** Groq's free tier allows 100K tokens/day. You've used yours up.\n\n```\n{e}\n```\n\n**Fix:** Either wait for the limit to reset, upgrade at https://console.groq.com/settings/billing, or use a smaller model like `llama-3.1-8b-instant`."
+            investigation.add_turn("assistant", msg)
+            return msg
+        except Exception as e:
+            msg = f"⚠️ **Error calling AI:** {type(e).__name__}: {e}"
+            investigation.add_turn("assistant", msg)
+            return msg
 
         msg = response.choices[0].message
 
