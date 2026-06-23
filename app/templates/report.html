@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="mb-6">
+    <div class="flex items-center gap-2 mb-1">
+        <a href="/investigation/{{ inv.id }}" class="text-gray-500 hover:text-gray-300 text-sm">&larr; Back to Investigation</a>
+        <span class="text-gray-600">|</span>
+        <a href="/" class="text-gray-500 hover:text-gray-300 text-sm">Home</a>
+    </div>
+    <h1 class="text-2xl font-bold text-white">Intelligence Report</h1>
+    <p class="text-gray-500 text-sm">{{ inv.target_type | capitalize }}: {{ inv.target_value }}</p>
+</div>
+
+<div class="bg-gray-900 border border-gray-800 rounded-lg p-8 mb-6 prose-custom max-w-none">
+    {{ report_html | safe }}
+</div>
+
+<div class="text-center mb-12">
+    <a href="/investigation/{{ inv.id }}" class="bg-gray-800 hover:bg-gray-700 text-gray-300 font-semibold py-2 px-6 rounded transition">Continue Investigation</a>
+</div>
+
+{% endblock %}

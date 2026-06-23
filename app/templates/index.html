@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="text-center py-8">
+    <h1 class="text-3xl font-bold text-white mb-2">Deep OSINT Investigation</h1>
+    <p class="text-gray-400">Human-in-the-loop intelligence gathering with AI-guided analysis</p>
+</div>
+
+<div class="max-w-lg mx-auto mb-12">
+    <form action="/investigation/new" method="POST" class="bg-gray-900 border border-gray-800 rounded-lg p-6">
+        <label class="block text-sm text-gray-400 mb-2">Target Type</label>
+        <select name="target_type" class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white mb-4 focus:outline-none focus:border-spectre-500">
+            <option value="person">Person</option>
+            <option value="email">Email Address</option>
+            <option value="username">Username</option>
+            <option value="company">Company</option>
+            <option value="website">Website / Domain</option>
+            <option value="phone">Phone Number</option>
+        </select>
+
+        <label class="block text-sm text-gray-400 mb-2">Target Value</label>
+        <input type="text" name="target_value" placeholder="e.g. John Doe, jane@example.com, @handle, Acme Corp"
+               class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white mb-6 focus:outline-none focus:border-spectre-500 font-mono">
+
+        <button type="submit" class="w-full bg-spectre-600 hover:bg-spectre-700 text-white font-semibold py-2.5 px-4 rounded transition">
+            Start Investigation
+        </button>
+    </form>
+</div>
+
+{% if investigations %}
+<div class="mt-8">
+    <h2 class="text-xl font-semibold text-gray-300 mb-4">Previous Investigations</h2>
+    <div class="space-y-2">
+        {% for inv in investigations %}
+        <a href="/investigation/{{ inv.id }}" class="block bg-gray-900 border border-gray-800 rounded-lg p-4 hover:border-spectre-700 transition">
+            <div class="flex items-center justify-between">
+                <div>
+                    <span class="text-spectre-400 text-xs uppercase tracking-wider">{{ inv.target_type }}</span>
+                    <span class="text-white font-semibold ml-2">{{ inv.target_value }}</span>
+                </div>
+                <div class="flex items-center gap-3 text-sm">
+                    <span class="text-gray-500">{{ inv.turn_count }} turns</span>
+                    <span class="px-2 py-0.5 rounded text-xs
+                        {% if inv.status == 'active' %}bg-green-900/50 text-green-400
+                        {% elif inv.status == 'completed' %}bg-blue-900/50 text-blue-400
+                        {% else %}bg-gray-800 text-gray-400{% endif %}">
+                        {{ inv.status }}
+                    </span>
+                </div>
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}
