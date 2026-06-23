@@ -13,42 +13,23 @@ from app.services.tools import TOOL_DEFINITIONS, TOOL_MAP
 
 SYSTEM_PROMPT = """You are Spectre OSINT — an elite Open-Source Intelligence analyst.
 
-YOUR JOB: Perform deep OSINT investigations autonomously using the tools available to you.
+YOUR JOB: Perform OSINT investigations using the tools available to you.
 
 ## WORKFLOW
-1. ANALYZE the target and plan your investigation
-2. Use web_search to find information
-3. Use web_fetch to read details from promising pages
-4. Use check_username to find accounts on social platforms
-5. Use search_social to find a person across platforms
-6. Use whois_lookup and dns_lookup for domain intelligence
-7. Use update_dossier to record confirmed findings
-8. Report your findings to the user with analysis
-
-## DOSSIER SECTIONS (use update_dossier to fill these)
-- identity_resolution — full name, aliases, age, occupation, education, location
-- digital_footprint — all publicly visible accounts
-- timeline — chronological career/education/life events
-- professional_intelligence — skills, career trajectory, expertise
-- network_map — relationships, collaborators, organizations
-- writing_style_analysis — vocabulary, tone, communication patterns
-- business_intelligence — companies, domains, investments, patents
-- technical_intelligence — GitHub, code, security research
-- reputation_assessment — press, achievements, awards
-- behavioral_patterns — posting schedule, interests, hobbies
-- influence_analysis — authority, audience, thought leadership
-- opportunity_analysis — potential collaborations, shared interests
-- verification — cross-check sources, confidence scores
-- unknowns — what remains unanswered
+1. Start with a quick scan — do 2-3 searches to get an overview
+2. Use web_search, check_username, search_social as your primary tools
+3. Use web_fetch on the most promising links
+4. Use update_dossier to record confirmed findings
+5. Give a summary of what you found
 
 ## RULES
-- Use at least 3-4 searches before concluding
-- Cross-reference information across multiple sources
+- Do 2-3 tool calls, then summarize — don't go too deep on the first pass
+- The user will ask "go deeper" if they want more
 - Distinguish: Confirmed | Highly likely | Possible | Unknown
-- Always cite your sources (include URLs)
-- Never fabricate evidence
-- Be thorough — dig deeper with follow-up searches
-- When you have enough data, present a comprehensive summary"""
+- Cite your sources (include URLs)
+- Never fabricate evidence"""
+
+DEEP_DIVE_INSTRUCTION = """The user wants you to go deeper. Do more searches, check more platforms, dig into details you missed. Use all your tools. Do 3-5 more tool calls before summarizing."""
 
 
 async def process_turn(investigation: Investigation, user_message: str) -> str:
@@ -57,22 +38,24 @@ async def process_turn(investigation: Investigation, user_message: str) -> str:
     if not investigation.messages:
         investigation.messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Begin OSINT investigation on: {investigation.target_type} = {investigation.target_value}"},
+            {"role": "user", "content": f"Quick OSINT scan on: {investigation.target_type} = {investigation.target_value}. Do 2-3 searches and give me a summary."},
         ]
-        return await _run_agent_loop(investigation)
+        return await _run_agent_loop(investigation, max_rounds=4)
 
     investigation.messages.append({"role": "user", "content": user_message})
 
+    is_deep_dive = any(w in user_message.lower() for w in ["deeper", "deep dive", "more", "dig", "further", "continue", "keep going"])
+    max_rounds = 8 if is_deep_dive else 4
+    if is_deep_dive:
+        investigation.messages.append({"role": "user", "content": DEEP_DIVE_INSTRUCTION})
+
     if len(investigation.messages) > 40:
-        system = investigation.messages[:1]
-        recent = investigation.messages[-30:]
-        investigation.messages = system + recent
+        investigation.messages = investigation.messages[:1] + investigation.messages[-30:]
 
-    return await _run_agent_loop(investigation)
+    return await _run_agent_loop(investigation, max_rounds)
 
 
-async def _run_agent_loop(investigation: Investigation) -> str:
-    max_rounds = 15
+async def _run_agent_loop(investigation: Investigation, max_rounds: int = 4) -> str:
     round_count = 0
 
     while round_count < max_rounds:
@@ -146,14 +129,14 @@ async def _run_agent_loop(investigation: Investigation) -> str:
                 "content": result if isinstance(result, str) else json.dumps(result),
             })
 
-        if round_count >= max_rounds - 2:
+        if round_count >= max_rounds:
             investigation.messages.append({
                 "role": "user",
-                "content": "You have enough data. Summarize your findings now and submit to dossier. Do not do more searches.",
+                "content": "Summarize what you found so far. Keep it concise.",
             })
 
     investigation.messages.append({
         "role": "assistant",
-        "content": "Investigation reached maximum depth. Here is what I found so far.",
+        "content": "Quick scan complete. Ask me to go deeper for more detail.",
     })
-    return "Investigation reached maximum depth."
+    return "Quick scan complete. Ask me to go deeper for more detail."
