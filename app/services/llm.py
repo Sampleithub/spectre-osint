@@ -29,6 +29,16 @@ class LLMService:
             self._client = AsyncOpenAI(**kwargs)
             self._model = config.openai_model
 
+    @property
+    def client(self) -> AsyncOpenAI:
+        self._ensure_client()
+        return self._client
+
+    @property
+    def model(self) -> str:
+        self._ensure_client()
+        return self._model or ""
+
     async def chat(
         self,
         messages: list[dict[str, str]],

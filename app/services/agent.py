@@ -62,7 +62,6 @@ async def process_turn(investigation: Investigation, user_message: str) -> str:
         return await _run_agent_loop(investigation)
 
     investigation.messages.append({"role": "user", "content": user_message})
-    investigation.add_turn("user", user_message)
 
     if len(investigation.messages) > 40:
         system = investigation.messages[:1]
