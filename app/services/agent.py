@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
 
 from openai import RateLimitError
 
@@ -13,23 +12,41 @@ from app.services.tools import TOOL_DEFINITIONS, TOOL_MAP
 
 SYSTEM_PROMPT = """You are Spectre OSINT — an elite Open-Source Intelligence analyst.
 
-YOUR JOB: Perform OSINT investigations using the tools available to you.
+YOUR JOB: Find EVERY digital footprint for a target using your tools.
+
+## CAPABILITIES
+- scan_username(username) — Checks 50+ platforms for a username, returns all accounts found
+- scan_email(email) — Checks breaches, Gravatar, and web mentions for an email
+- scan_domain(domain) — Full domain recon: DNS, SSL, subdomains (via crt.sh), WHOIS, tech stack
+- scan_person(name, context) — Searches social media, news, and professional sites for a person
+- deep_search(query) — Broad web search for any topic
+- web_fetch(url) — Read full page content
+- save_finding(section, content, confidence) — Record findings in the dossier
 
 ## WORKFLOW
-1. Start with a quick scan — do 2-3 searches to get an overview
-2. Use web_search, check_username, search_social as your primary tools
-3. Use web_fetch on the most promising links
-4. Use update_dossier to record confirmed findings
-5. Give a summary of what you found
+1. Start with the most relevant scan tool for the target type
+2. Review results, identify promising leads
+3. Use deep_search or web_fetch to dig deeper on specific findings
+4. Call save_finding to record verified information
+5. Present a comprehensive, organized summary
+
+## OUTPUT FORMAT
+Give your response in three sections:
+**Summary** — What you found. Key facts only.
+**Digital Footprint** — Organized list of all accounts, profiles, and mentions found with URLs.
+**Next Steps** — What to investigate next or what's still unknown.
 
 ## RULES
-- Do 2-3 tool calls, then summarize — don't go too deep on the first pass
-- The user will ask "go deeper" if they want more
+- Always run at least one comprehensive scan before concluding
 - Distinguish: Confirmed | Highly likely | Possible | Unknown
-- Cite your sources (include URLs)
+- Include URLs for every finding
+- Be thorough — check multiple angles
 - Never fabricate evidence"""
 
-DEEP_DIVE_INSTRUCTION = """The user wants you to go deeper. Do more searches, check more platforms, dig into details you missed. Use all your tools. Do 3-5 more tool calls before summarizing."""
+
+def _is_deep_dive_request(msg: str) -> bool:
+    keywords = ["deeper", "deep dive", "more", "dig", "further", "continue", "keep going", "again", "another", "additional", "scan", "check"]
+    return any(w in msg.lower() for w in keywords)
 
 
 async def process_turn(investigation: Investigation, user_message: str) -> str:
@@ -38,16 +55,14 @@ async def process_turn(investigation: Investigation, user_message: str) -> str:
     if not investigation.messages:
         investigation.messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Quick OSINT scan on: {investigation.target_type} = {investigation.target_value}. Do 2-3 searches and give me a summary."},
+            {"role": "user", "content": f"Investigate this target and find all digital footprints: {investigation.target_type} = {investigation.target_value}"},
         ]
-        return await _run_agent_loop(investigation, max_rounds=4)
+        return await _run_agent_loop(investigation, max_rounds=6)
 
     investigation.messages.append({"role": "user", "content": user_message})
 
-    is_deep_dive = any(w in user_message.lower() for w in ["deeper", "deep dive", "more", "dig", "further", "continue", "keep going"])
-    max_rounds = 8 if is_deep_dive else 4
-    if is_deep_dive:
-        investigation.messages.append({"role": "user", "content": DEEP_DIVE_INSTRUCTION})
+    is_deep = _is_deep_dive_request(user_message)
+    max_rounds = 8 if is_deep else 5
 
     if len(investigation.messages) > 40:
         investigation.messages = investigation.messages[:1] + investigation.messages[-30:]
@@ -55,7 +70,7 @@ async def process_turn(investigation: Investigation, user_message: str) -> str:
     return await _run_agent_loop(investigation, max_rounds)
 
 
-async def _run_agent_loop(investigation: Investigation, max_rounds: int = 4) -> str:
+async def _run_agent_loop(investigation: Investigation, max_rounds: int = 6) -> str:
     round_count = 0
 
     while round_count < max_rounds:
@@ -100,15 +115,15 @@ async def _run_agent_loop(investigation: Investigation, max_rounds: int = 4) -> 
             except json.JSONDecodeError:
                 args = {}
 
-            if tool_name == "update_dossier":
+            if tool_name == "save_finding":
                 section = args.get("section", "")
                 content = args.get("content", "")
-                confidence = args.get("confidence", 50)
+                confidence = args.get("confidence", 70)
                 if section and content:
                     investigation.dossier.update_section(section, content)
                     if confidence:
                         investigation.dossier.confidence_scores[section] = confidence
-                    result = json.dumps({"status": "updated", "section": section, "confidence": confidence})
+                    result = json.dumps({"status": "saved", "section": section, "confidence": confidence})
                 else:
                     result = json.dumps({"error": "Missing section or content"})
             else:
@@ -118,8 +133,8 @@ async def _run_agent_loop(investigation: Investigation, max_rounds: int = 4) -> 
                 else:
                     try:
                         result = await fn(**args)
-                        if len(result) > 3000:
-                            result = result[:3000] + "\n\n[... truncated ...]"
+                        if len(result) > 4000:
+                            result = result[:4000] + "\n\n[... truncated ...]"
                     except Exception as e:
                         result = json.dumps({"error": str(e)})
 
@@ -129,14 +144,14 @@ async def _run_agent_loop(investigation: Investigation, max_rounds: int = 4) -> 
                 "content": result if isinstance(result, str) else json.dumps(result),
             })
 
-        if round_count >= max_rounds:
+        if round_count >= max_rounds - 1:
             investigation.messages.append({
                 "role": "user",
-                "content": "Summarize what you found so far. Keep it concise.",
+                "content": "You have enough data. Summarize all findings now with the digital footprint. Use save_finding for key entries.",
             })
 
     investigation.messages.append({
         "role": "assistant",
-        "content": "Quick scan complete. Ask me to go deeper for more detail.",
+        "content": "Investigation complete. All findings have been saved to the dossier.",
     })
-    return "Quick scan complete. Ask me to go deeper for more detail."
+    return "Investigation complete. All findings have been saved to the dossier."
